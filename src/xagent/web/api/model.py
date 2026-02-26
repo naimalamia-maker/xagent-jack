@@ -374,10 +374,15 @@ async def get_model(
     model_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> ModelWithAccessInfo:
     """Get a specific model configuration"""
+    # Decode URL-encoded model_id (supports double-encoding for slashes)
+    import urllib.parse
+
+    decoded_model_id = urllib.parse.unquote(model_id)
+
     model_storage = CoreStorage(db, DBModel)
 
     # Check if model exists (resolves by ID, model_id, or model_name)
-    db_model = model_storage.get_db_model(model_id)
+    db_model = model_storage.get_db_model(decoded_model_id)
     if not db_model:
         raise HTTPException(status_code=404, detail="Model not found")
 
@@ -426,10 +431,15 @@ async def update_model(
     user: User = Depends(get_current_user),
 ) -> ModelWithAccessInfo:
     """Update a model configuration"""
+    # Decode URL-encoded model_id (supports double-encoding for slashes)
+    import urllib.parse
+
+    decoded_model_id = urllib.parse.unquote(model_id)
+
     model_storage = CoreStorage(db, DBModel)
 
     # Resolve model first
-    db_model_resolved = model_storage.get_db_model(model_id)
+    db_model_resolved = model_storage.get_db_model(decoded_model_id)
     if not db_model_resolved:
         raise HTTPException(status_code=404, detail="Model not found")
 
@@ -453,9 +463,11 @@ async def update_model(
 
     # Handle admin sharing updates
     if model_update.share_with_users is not None:
-        if not user.is_admin:
+        # Only check admin permission when enabling sharing (share_with_users=True)
+        # Allow non-admin users to disable sharing (share_with_users=False)
+        if model_update.share_with_users and not user.is_admin:
             raise HTTPException(
-                status_code=403, detail="Only administrators can update sharing status"
+                status_code=403, detail="Only administrators can enable global sharing"
             )
 
         # Update sharing status for all user models
@@ -530,10 +542,15 @@ async def delete_model(
     model_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> dict:
     """Delete a model configuration"""
+    # Decode URL-encoded model_id (supports double-encoding for slashes)
+    import urllib.parse
+
+    decoded_model_id = urllib.parse.unquote(model_id)
+
     model_storage = CoreStorage(db, DBModel)
 
     # Resolve model first
-    db_model = model_storage.get_db_model(model_id)
+    db_model = model_storage.get_db_model(decoded_model_id)
     if not db_model:
         raise HTTPException(status_code=404, detail="Model not found")
 
@@ -561,7 +578,7 @@ async def delete_model(
     ).delete()
 
     # Delete the model using CoreStorage
-    model_storage.delete(model_id)
+    model_storage.delete(decoded_model_id)
 
     return {"message": "Model deleted successfully"}
 

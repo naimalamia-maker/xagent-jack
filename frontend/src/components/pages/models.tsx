@@ -40,6 +40,10 @@ import {
 import { useI18n } from "@/contexts/i18n-context"
 import { ScrollArea } from "@/components/ui/scroll-area"
 
+function doubleEncodeModelId(modelId: string): string {
+  return encodeURIComponent(encodeURIComponent(modelId))
+}
+
 // Interfaces from models-1.tsx
 interface Model {
   id: number
@@ -319,7 +323,7 @@ export function ModelsPage() {
 
       for (const payload of payloads) {
         const url = editingModel
-          ? `${getApiUrl()}/api/models/${editingModel.model_id}`
+          ? `${getApiUrl()}/api/models/${doubleEncodeModelId(editingModel.model_id)}`
           : `${getApiUrl()}/api/models/`
 
         const response = await apiRequest(url, {
@@ -418,7 +422,7 @@ export function ModelsPage() {
     if (!confirm(t('models.deleteConfirm'))) return
 
     try {
-      const response = await apiRequest(`${getApiUrl()}/api/models/${modelId}`, {
+      const response = await apiRequest(`${getApiUrl()}/api/models/${doubleEncodeModelId(modelId)}`, {
         method: "DELETE",
         headers: {}
       })

@@ -12,6 +12,10 @@ import { useAuth } from "@/contexts/auth-context"
 import { useI18n } from "@/contexts/i18n-context"
 import { useApp } from "@/contexts/app-context-chat"
 
+function doubleEncodeModelId(modelId: string): string {
+  return encodeURIComponent(encodeURIComponent(modelId))
+}
+
 interface Agent {
   id: number
   name: string
@@ -72,7 +76,7 @@ export default function AgentChatPage() {
           // Fetch model name if agent has general model configured
           if (data.models?.general) {
             try {
-              const modelResponse = await apiRequest(`${getApiUrl()}/api/models/${data.models.general}`)
+              const modelResponse = await apiRequest(`${getApiUrl()}/api/models/${doubleEncodeModelId(data.models.general)}`)
               if (modelResponse.ok) {
                 const modelData = await modelResponse.json()
                 setAgentModelName(modelData.model_id || modelData.name || "")
