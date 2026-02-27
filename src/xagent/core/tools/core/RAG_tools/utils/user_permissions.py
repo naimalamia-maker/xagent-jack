@@ -21,16 +21,15 @@ class UserPermissions:
             LanceDB filter expression string, or None for no filtering
 
         Note:
-            Legacy data (user_id = NULL) is only accessible to admin users.
-            Regular users can only see data they explicitly own (user_id == their ID).
+            Legacy data (user_id = NULL) is accessible to all authenticated users.
+            Regular users can see their own data OR legacy data.
         """
         if is_admin:
             # Admins can see all data (including NULL user_id legacy data)
             return None
         elif user_id is not None:
-            # Regular users can ONLY see their own data
-            # Legacy data (NULL user_id) is NOT visible to regular users
-            return f"user_id == {user_id}"
+            # Regular users can see their own data OR legacy data (NULL user_id)
+            return f"user_id == {user_id} or user_id is null"
         else:
             # Unauthenticated users cannot see any data
             # Return a filter that matches nothing
@@ -52,8 +51,8 @@ class UserPermissions:
             True if access allowed
 
         Note:
-            Legacy data (data_user_id = NULL) is only accessible to admin users.
-            Regular users can only access data they explicitly own.
+            Legacy data (data_user_id = NULL) is accessible to all authenticated users.
+            Regular users can access their own data OR legacy data.
         """
         if is_admin:
             # Admins can access all data including legacy (NULL) data
@@ -61,9 +60,8 @@ class UserPermissions:
         if user_id is None:
             # Unauthenticated users cannot access any data
             return False
-        # Users can ONLY access their own data
-        # Legacy data (NULL data_user_id) is NOT accessible to regular users
-        return data_user_id == user_id
+        # Users can access their own data OR legacy data (NULL data_user_id)
+        return data_user_id == user_id or data_user_id is None
 
     @staticmethod
     def get_write_user_id(user_id: Optional[int]) -> Optional[int]:
