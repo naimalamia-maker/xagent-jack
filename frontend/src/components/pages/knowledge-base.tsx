@@ -1,18 +1,17 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { SelectRadix, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Select, SelectRadix, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { getApiUrl } from "@/lib/utils"
 import { useAuth } from "@/contexts/auth-context"
 import { useI18n } from "@/contexts/i18n-context"
@@ -74,25 +73,27 @@ interface WebIngestionResult {
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet"
 import { KnowledgeBaseDetailContent } from "./knowledge-base-detail"
+import { toast } from "sonner"
 
 export function KnowledgeBasePage() {
   const { token } = useAuth()
   const { t, locale } = useI18n()
   const [collections, setCollections] = useState<Collection[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [deletingCollection, setDeletingCollection] = useState<string | null>(null)
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [filteredCollections, setFilteredCollections] = useState<Collection[]>([])
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 文件上传相关状态
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [ingestionResults, setIngestionResults] = useState<IngestionResult[]>([])
+  const [isDragging, setIsDragging] = useState(false)
 
   // 网站导入相关状态
   const [isWebIngesting, setIsWebIngesting] = useState(false)
@@ -162,7 +163,7 @@ export function KnowledgeBasePage() {
       const data = await response.json()
       setCollections(data.collections || [])
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error")
+      toast.error(err instanceof Error ? err.message : "Unknown error")
     } finally {
       setLoading(false)
     }
@@ -201,13 +202,12 @@ export function KnowledgeBasePage() {
 
   const handleCreateCollection = async () => {
     if (!newCollectionName.trim()) {
-      setError(t("kb.errors.nameRequired"))
+      toast.error(t("kb.errors.nameRequired"))
       return
     }
 
     try {
       setIsCreateDialogOpen(false)
-      setError(null)
 
       // 这里可以扩展为真正的创建collection API
       // 目前通过上传文件来创建collection
@@ -216,7 +216,47 @@ export function KnowledgeBasePage() {
       setNewCollectionName("")
       setNewCollectionDescription("")
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("kb.errors.createFailed"))
+      toast.error(err instanceof Error ? err.message : t("kb.errors.createFailed"))
+    }
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+
+    if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget as Node)) {
+      return
+    }
+
+    setIsDragging(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const files = Array.from(e.dataTransfer.files)
+      const allowedExtensions = [".pdf", ".txt", ".html", ".htm", ".md", ".doc", ".docx", ".xlsx", ".ppt", ".pptx", ".csv"]
+      const validFiles = files.filter(file => {
+        const fileName = file.name.toLowerCase()
+        return allowedExtensions.some(ext => fileName.endsWith(ext))
+      })
+
+      if (validFiles.length !== files.length) {
+        toast.error(t("kb.errors.unsupportedFileType") || "部分文件格式不支持，已跳过")
+      }
+
+      if (validFiles.length > 0) {
+        setSelectedFiles(prev => [...prev, ...validFiles])
+      }
     }
   }
 
@@ -231,7 +271,7 @@ export function KnowledgeBasePage() {
 
   const handleUpload = async () => {
     if (selectedFiles.length === 0) {
-      setError(t("kb.errors.uploadFileRequired"))
+      toast.error(t("kb.errors.uploadFileRequired"))
       return
     }
 
@@ -265,6 +305,10 @@ export function KnowledgeBasePage() {
 
         if (!response.ok) {
           const errorData = await response.json()
+          if (errorData.status === 'error') {
+            setIngestionResults(prev => [...prev, errorData])
+            throw new Error(errorData.message || t("kb.errors.uploadFailedFile", { name: file.name }))
+          }
           throw new Error(errorData.detail || t("kb.errors.uploadFailedFile", { name: file.name }))
         }
 
@@ -291,7 +335,7 @@ export function KnowledgeBasePage() {
       setActiveImportTab("file")
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("kb.errors.uploadFailed"))
+      toast.error(err instanceof Error ? err.message : t("kb.errors.uploadFailed"))
     } finally {
       setIsUploading(false)
     }
@@ -299,7 +343,7 @@ export function KnowledgeBasePage() {
 
   const handleWebIngest = async () => {
     if (!webIngestionConfig.start_url.trim()) {
-      setError(t("kb.errors.startUrlRequired"))
+      toast.error(t("kb.errors.startUrlRequired"))
       return
     }
 
@@ -355,6 +399,10 @@ export function KnowledgeBasePage() {
 
       if (!response.ok) {
         const errorData = await response.json()
+        if (errorData.status === 'error') {
+          setWebIngestionResult(errorData)
+          throw new Error(errorData.message || t("kb.errors.webIngestFailed"))
+        }
         throw new Error(errorData.detail || t("kb.errors.webIngestFailed"))
       }
 
@@ -386,7 +434,7 @@ export function KnowledgeBasePage() {
       })
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("kb.errors.webIngestFailed"))
+      toast.error(err instanceof Error ? err.message : t("kb.errors.webIngestFailed"))
     } finally {
       setIsWebIngesting(false)
       setWebIngestionProgress(0)
@@ -421,7 +469,7 @@ export function KnowledgeBasePage() {
       await fetchCollections()
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("kb.errors.deleteFailedGeneric"))
+      toast.error(err instanceof Error ? err.message : t("kb.errors.deleteFailedGeneric"))
     } finally {
       setDeletingCollection(null)
     }
@@ -483,20 +531,12 @@ export function KnowledgeBasePage() {
                 className="pl-10"
               />
             </div>
-            <Button onClick={() => { setError(null); setIsCreateDialogOpen(true) }} className="flex items-center gap-2">
+            <Button onClick={() => { setIsCreateDialogOpen(true) }} className="flex items-center gap-2">
               <Plus size={16} className="mr-2" />
               {t("kb.header.new")}
             </Button>
           </div>
         </div>
-
-        {/* Error */}
-        {error && (
-          <Alert variant="destructive" className="flex justify-start items-center mb-6">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
 
         {/* Collections Grid */}
         {filteredCollections.length > 0 ? (
@@ -551,7 +591,7 @@ export function KnowledgeBasePage() {
               {searchQuery ? t("kb.empty.hintSearch") : t("kb.empty.hintCreate")}
             </p>
             {!searchQuery && (
-              <Button onClick={() => { setError(null); setIsCreateDialogOpen(true) }} className="flex items-center gap-2">
+              <Button onClick={() => { setIsCreateDialogOpen(true) }} className="flex items-center gap-2">
                 <Plus size={16} className="mr-2" />
                 {t("kb.header.new")}
               </Button>
@@ -568,13 +608,6 @@ export function KnowledgeBasePage() {
                 {t("kb.dialog.createDescription")}
               </DialogDescription>
             </DialogHeader>
-
-            {error && (
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
 
             <div className="flex flex-col gap-6">
               {/* 基本信息 */}
@@ -620,13 +653,22 @@ export function KnowledgeBasePage() {
                     <h3 className="text-lg font-medium">{t("kb.dialog.fileUpload.title")}</h3>
 
                     {/* 文件选择区域 */}
-                    <div className="w-full border-2 border-dashed border-border rounded-lg p-8 text-center">
-                      <Upload className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                      <p className="text-lg font-medium mb-2">{t("kb.dialog.fileUpload.dropOrClick")}</p>
+                    <div
+                      className={`w-full border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:bg-muted/50 transition-colors ${
+                        isDragging ? "border-primary bg-primary/10" : "border-border"
+                      }`}
+                      onClick={() => fileInputRef.current?.click()}
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                    >
+                      <Upload className={`h-12 w-12 mx-auto mb-4 ${isDragging ? "text-primary" : "text-muted-foreground"}`} />
+                      <p className="text-sm font-medium mb-2">{t("kb.dialog.fileUpload.dropOrClick")}</p>
                       <p className="text-sm text-muted-foreground mb-4">
                         {t("kb.dialog.fileUpload.supportedFormats")}
                       </p>
                       <input
+                        ref={fileInputRef}
                         type="file"
                         multiple
                         accept=".pdf,.txt,.html,.htm,.md,.doc,.docx,.xlsx,.ppt,.pptx,.csv"
@@ -634,13 +676,6 @@ export function KnowledgeBasePage() {
                         className="hidden"
                         id="file-upload"
                       />
-                      <label
-                        htmlFor="file-upload"
-                        className="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 px-4 py-2 cursor-pointer"
-                      >
-                        <FileText size={16} className="mr-2" />
-                        {t("kb.dialog.fileUpload.selectFiles")}
-                      </label>
                     </div>
 
                     {/* 已选择文件列表 */}
@@ -690,15 +725,24 @@ export function KnowledgeBasePage() {
                         <ScrollArea className="h-32 border rounded-md p-2">
                           <div className="space-y-2">
                             {ingestionResults.map((result, index) => (
-                              <div key={index} className="flex items-center gap-2 p-2 bg-muted rounded">
-                                {getStatusIcon(result.status)}
-                                <span className="text-sm">{result.collection}</span>
-                                <Badge variant="outline" className="text-xs">
-                                  {result.document_count} {t("kb.dialog.fileUpload.processResult.createDocuments")}
-                                </Badge>
-                                <Badge variant="outline" className="text-xs">
-                                  {result.chunks_count} {t("kb.dialog.fileUpload.processResult.textChunks")}
-                                </Badge>
+                              <div key={index} className="flex flex-col gap-1 p-2 bg-muted rounded">
+                                <div className="flex items-center gap-2">
+                                  {getStatusIcon(result.status)}
+                                  <span className="text-sm">{result.collection}</span>
+                                  {result.status === 'success' && (
+                                    <>
+                                      <Badge variant="outline" className="text-xs">
+                                        {result.document_count} {t("kb.dialog.fileUpload.processResult.createDocuments")}
+                                      </Badge>
+                                      <Badge variant="outline" className="text-xs">
+                                        {result.chunks_count} {t("kb.dialog.fileUpload.processResult.textChunks")}
+                                      </Badge>
+                                    </>
+                                  )}
+                                </div>
+                                {result.status === 'error' && result.message && (
+                                  <p className="text-xs text-red-500 ml-6 break-all">{result.message}</p>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -923,33 +967,31 @@ export function KnowledgeBasePage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <Label htmlFor="parse_method">{t("kb.index.parseMethod")}</Label>
-                    <select
-                      id="parse_method"
+                    <Select
                       value={ingestionConfig.parse_method}
-                      onChange={(e) => setIngestionConfig(prev => ({ ...prev, parse_method: e.target.value }))}
-                      className="w-full p-2 border rounded-md bg-background"
-                    >
-                      <option value="default">{t("kb.index.parseOptions.default")}</option>
-                      <option value="pypdf">{t("kb.index.parseOptions.pypdf")}</option>
-                      <option value="pdfplumber">{t("kb.index.parseOptions.pdfplumber")}</option>
-                      <option value="unstructured">{t("kb.index.parseOptions.unstructured")}</option>
-                      <option value="pymupdf">{t("kb.index.parseOptions.pymupdf")}</option>
-                      <option value="deepdoc">{t("kb.index.parseOptions.deepdoc")}</option>
-                    </select>
+                      onValueChange={(value) => setIngestionConfig(prev => ({ ...prev, parse_method: value }))}
+                      options={[
+                        { value: "default", label: t("kb.index.parseOptions.default") },
+                        { value: "pypdf", label: t("kb.index.parseOptions.pypdf") },
+                        { value: "pdfplumber", label: t("kb.index.parseOptions.pdfplumber") },
+                        { value: "unstructured", label: t("kb.index.parseOptions.unstructured") },
+                        { value: "pymupdf", label: t("kb.index.parseOptions.pymupdf") },
+                        { value: "deepdoc", label: t("kb.index.parseOptions.deepdoc") },
+                      ]}
+                    />
                   </div>
 
                   <div>
                     <Label htmlFor="chunk_strategy">{t("kb.index.chunkStrategy")}</Label>
-                    <select
-                      id="chunk_strategy"
+                    <Select
                       value={ingestionConfig.chunk_strategy}
-                      onChange={(e) => setIngestionConfig(prev => ({ ...prev, chunk_strategy: e.target.value }))}
-                      className="w-full p-2 border rounded-md bg-background"
-                    >
-                      <option value="recursive">{t("kb.index.chunkOptions.recursive")}</option>
-                      <option value="fixed_size">{t("kb.index.chunkOptions.fixed_size")}</option>
-                      <option value="markdown">{t("kb.index.chunkOptions.markdown")}</option>
-                    </select>
+                      onValueChange={(value) => setIngestionConfig(prev => ({ ...prev, chunk_strategy: value }))}
+                      options={[
+                        { value: "recursive", label: t("kb.index.chunkOptions.recursive") },
+                        { value: "fixed_size", label: t("kb.index.chunkOptions.fixed_size") },
+                        { value: "markdown", label: t("kb.index.chunkOptions.markdown") },
+                      ]}
+                    />
                   </div>
 
                   <div>

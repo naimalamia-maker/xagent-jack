@@ -1251,6 +1251,7 @@ Build when you need.`
       webIngestFailed: "Website import failed",
       deleteFailed: "Failed to delete knowledge base: {name}",
       deleteFailedGeneric: "Failed to delete knowledge base",
+      unsupportedFileType: "Unsupported file type",
     },
     actions: {
       deleteConfirm: "Are you sure you want to delete knowledge base {name}? This action cannot be undone.",
@@ -1309,6 +1310,7 @@ Build when you need.`
         uploading: "Uploading...",
         uploadSuccess: "Upload Successful",
         uploadFailed: "Upload Failed",
+        progressTitle: "Upload Progress",
         processing: "Processing...",
         processSuccess: "Processing Success",
         processResult: {
@@ -1321,6 +1323,7 @@ Build when you need.`
         title: "Website Import",
         description: "Respect robots.txt and crawl target website content, then index",
         basic: {
+          title: "Basic Configuration",
           startUrl: "Start URL",
           maxPages: "Max Pages",
           crawlDepth: "Crawl Depth",
@@ -1778,6 +1781,12 @@ Build when you need.`
           smallFast: "Small & Fast",
           visual: "Visual Model",
           compact: "Compact Model",
+        },
+        tips: {
+          general: "General purpose LLM suitable for most tasks, balancing performance and cost.",
+          smallFast: "Fast response and lower cost, suitable for simple tasks or low latency scenarios.",
+          visual: "Capable of image recognition and processing, suitable for image-related tasks.",
+          compact: "Lightweight model suitable for resource-constrained or high-immediacy scenarios.",
         },
       },
       knowledgeBase: {
