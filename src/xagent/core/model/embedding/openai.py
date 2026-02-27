@@ -35,13 +35,13 @@ class OpenAIEmbedding(BaseEmbedding):
         # Ensure base_url ends with /embeddings for OpenAI-compatible APIs
         if base_url:
             # First, strip trailing slashes for consistent checking
-            clean_base_url = base_url.rstrip('/')
+            clean_base_url = base_url.rstrip("/")
 
             # If base_url doesn't end with /embeddings, append it
-            if not clean_base_url.endswith('/embeddings'):
+            if not clean_base_url.endswith("/embeddings"):
                 # Check if it ends with /v1 or similar
-                if clean_base_url.endswith('/v1'):
-                    self.base_url = clean_base_url + '/embeddings'
+                if clean_base_url.endswith("/v1"):
+                    self.base_url = clean_base_url + "/embeddings"
                 else:
                     # For other cases, just use as-is (might be custom endpoint)
                     self.base_url = base_url
