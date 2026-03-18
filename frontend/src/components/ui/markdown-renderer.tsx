@@ -95,7 +95,8 @@ export function MarkdownRenderer({ content, className = '', onFileClick }: Markd
           )
         }
 
-        return <img src={src || ''} alt={alt || ''} title={title || alt || ''} {...props} />
+        if (!src) return null
+        return <img src={src} alt={alt || ''} title={title || alt || ''} {...props} />
       }
     }),
     [onFileClick]

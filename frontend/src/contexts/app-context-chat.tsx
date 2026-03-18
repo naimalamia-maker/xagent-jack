@@ -71,8 +71,7 @@ if (typeof window !== 'undefined') {
 }
 // Flag to track if we're loading historical data
 let isHistoricalDataLoading = false
-// Store pending task info for auto-execution after historical data loads
-let pendingTaskToExecute: { description: string } | null = null
+// pendingTaskToExecute is now React state inside AppProvider (see below)
 const isDuplicateMessage = (content: string | React.ReactNode, type: string = 'general', force: boolean = false, shouldCache: boolean = true) => {
   // Convert React element to string representation for comparison
   let contentStr: string
@@ -744,6 +743,7 @@ const historicalDataRequestMap = new Map<number, boolean>()
 export function AppProvider({ children, token }: { children: React.ReactNode; token?: string }) {
   const [state, dispatch] = useReducer(appReducer, initialState)
   const [pendingMessage, setPendingMessage] = useState<{ message: string; files?: File[] } | null>(null)
+  const [pendingTaskToExecute, setPendingTaskToExecute] = useState<{ description: string } | null>(null)
   const { token: authToken } = useAuth() // Get auth token from context
   const { t } = useI18n()
   const router = useRouter()
@@ -809,26 +809,8 @@ export function AppProvider({ children, token }: { children: React.ReactNode; to
       // We can't access sendChatMessage here.
     }
 
-    // Auto-execute PENDING tasks from Agent Builder
-    setTimeout(() => {
-      if (pendingTaskToExecute) {
-        const hasUserMessages = stateRef.current.messages.some(m => m.role === 'user')
-        console.log('🔍 onConnect - checking auto-execute:', {
-          hasPendingTask: !!pendingTaskToExecute,
-          pendingDescription: pendingTaskToExecute.description,
-          hasUserMessages,
-        })
-
-        if (!hasUserMessages) {
-          console.log('🚀 Auto-executing PENDING task from Agent Builder (onConnect):', pendingTaskToExecute.description)
-          // sendChatMessage(pendingTaskToExecute.description, []) // Cannot access sendChatMessage
-          pendingTaskToExecute = null
-        } else {
-          console.log('⏭️ Skipping auto-execute, already has user messages')
-          pendingTaskToExecute = null
-        }
-      }
-    }, 1000)
+    // Auto-execute PENDING tasks from Agent Builder is handled by useEffect below
+    // (onConnect cannot access sendChatMessage due to circular dependency)
   }, [])
 
   const {
@@ -865,23 +847,19 @@ export function AppProvider({ children, token }: { children: React.ReactNode; to
   // Handle auto-execute pending task separately
   useEffect(() => {
     if (isConnected && pendingTaskToExecute) {
-       // Logic moved to effect
-       // But wait, pendingTaskToExecute is not state, it's a let variable.
-       // Effect won't run when it changes.
-       // But it runs when isConnected changes.
-
        const timer = setTimeout(() => {
         if (pendingTaskToExecute) {
           const hasUserMessages = stateRef.current.messages.some(m => m.role === 'user')
           if (!hasUserMessages) {
+            console.log('🚀 Auto-executing PENDING task from Agent Builder:', pendingTaskToExecute.description)
             sendChatMessage(pendingTaskToExecute.description, [])
-            pendingTaskToExecute = null
           }
+          setPendingTaskToExecute(null)
         }
        }, 1000)
        return () => clearTimeout(timer)
     }
-  }, [isConnected, sendChatMessage])
+  }, [isConnected, pendingTaskToExecute, sendChatMessage])
 
   // Debug: Log when taskId is passed to useWebSocket
   useEffect(() => {
@@ -984,9 +962,10 @@ export function AppProvider({ children, token }: { children: React.ReactNode; to
               statusType: typeof taskData.status
             })
 
-            // Store pending task for auto-execution
-            if (taskData.status === 'pending' && taskData.description) {
-              pendingTaskToExecute = { description: taskData.description }
+            // Store pending task for auto-execution (handled by useEffect with sendChatMessage)
+            // Only set if there's no pendingMessage already queued (to avoid sending duplicate messages)
+            if (taskData.status === 'pending' && taskData.description && !pendingMessageRef.current) {
+              setPendingTaskToExecute({ description: taskData.description })
               console.log('💾 Stored pending task for auto-execution:', taskData.description)
             }
 

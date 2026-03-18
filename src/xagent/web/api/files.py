@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import mimetypes
+import urllib.parse
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -318,6 +319,23 @@ def _check_file_access(file_record: UploadedFile, user: User) -> None:
 async def _try_convert_pptx_to_pdf(path: Path) -> Optional[StreamingResponse]:
     if path.suffix.lower() != ".pptx":
         return None
+
+    # Check for cached PDF next to the PPTX file
+    cached_pdf = path.with_suffix(".pdf")
+    if cached_pdf.exists():
+        pptx_mtime = path.stat().st_mtime
+        pdf_mtime = cached_pdf.stat().st_mtime
+        if pdf_mtime >= pptx_mtime:
+            pdf_content = cached_pdf.read_bytes()
+            return StreamingResponse(
+                iter([pdf_content]),
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": "inline; filename=\"preview.pdf\"; filename*=UTF-8''"
+                    + urllib.parse.quote(f"{path.stem}.pdf")
+                },
+            )
+
     import tempfile
 
     try:
@@ -334,7 +352,7 @@ async def _try_convert_pptx_to_pdf(path: Path) -> Optional[StreamingResponse]:
                 stderr=asyncio.subprocess.PIPE,
             )
             try:
-                _, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                _, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.wait()
@@ -345,48 +363,163 @@ async def _try_convert_pptx_to_pdf(path: Path) -> Optional[StreamingResponse]:
             if not pdf_files:
                 return None
             pdf_content = pdf_files[0].read_bytes()
+
+            # Cache the PDF next to the PPTX for future requests
+            try:
+                cached_pdf.write_bytes(pdf_content)
+            except Exception:
+                pass
+
             return StreamingResponse(
                 iter([pdf_content]),
                 media_type="application/pdf",
-                headers={"Content-Disposition": f'inline; filename="{path.stem}.pdf"'},
+                headers={
+                    "Content-Disposition": "inline; filename=\"preview.pdf\"; filename*=UTF-8''"
+                    + urllib.parse.quote(f"{path.stem}.pdf")
+                },
             )
     except Exception:
         return None
 
 
 def _pptx_fallback_html(path: Path) -> HTMLResponse:
+    import base64
+
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    from pptx.util import Emu
+
     prs = Presentation(str(path))
-    html_content = """
+    slide_width = prs.slide_width or Emu(12192000)  # default LAYOUT_WIDE
+    slide_height = prs.slide_height or Emu(6858000)
+
+    # Aspect ratio for slide container
+    aspect = (
+        Emu(slide_height).inches / Emu(slide_width).inches if slide_width else 0.5625
+    )
+
+    html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="UTF-8">
         <style>
-            body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
-            h1 { color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px; }
-            h2 { color: #555; margin-top: 30px; }
-            .slide { border: 1px solid #ddd; padding: 20px; margin: 20px 0; background: #f9f9f9; border-radius: 8px; }
-            .slide-number { color: #999; font-size: 12px; margin-top: 10px; }
-            .text-content { white-space: pre-wrap; }
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            body {{ font-family: Arial, sans-serif; background: #1a1a2e; padding: 20px; }}
+            .slide-container {{ max-width: 960px; margin: 16px auto; border-radius: 8px;
+                overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                position: relative; width: 100%; padding-top: {aspect * 100:.2f}%; }}
+            .slide-inner {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+                overflow: hidden; }}
+            .slide-element {{ position: absolute; }}
+            .slide-element.slide-text {{ z-index: 2; overflow: visible; }}
+            .slide-element.slide-img {{ z-index: 1; overflow: hidden; }}
+            .slide-element p {{ margin: 2px 0; }}
+            .slide-image {{ max-width: 100%; max-height: 100%; object-fit: contain; }}
+            .slide-label {{ text-align: center; color: #888; font-size: 12px;
+                margin: 4px auto 12px; max-width: 960px; }}
         </style>
     </head>
     <body>
     """
-    html_content += f"<h1>📊 {path.name}</h1>"
+
+    total_slides = len(prs.slides)
+    sw = float(Emu(slide_width).inches) if slide_width else 13.333
+    sh = float(Emu(slide_height).inches) if slide_height else 7.5
+
     for slide_num, slide in enumerate(prs.slides, 1):
-        slide_text = []
+        # Background color
+        bg_color = "#FFFFFF"
+        try:
+            bg = slide.background
+            if bg and bg.fill and bg.fill.fore_color:
+                bg_color = f"#{bg.fill.fore_color.rgb}"
+        except Exception:
+            pass
+
+        html_content += (
+            f'<div class="slide-container">'
+            f'<div class="slide-inner" style="background:{bg_color};">'
+        )
+
         for shape in slide.shapes:
-            shape_text = getattr(shape, "text", None)
-            if shape_text:
-                slide_text.append(str(shape_text))
-        if slide_text:
-            html_content += f"""
-            <div class=\"slide\">
-                <h2>Slide {slide_num}</h2>
-                <div class=\"text-content\">{"<br>".join(slide_text)}</div>
-                <div class=\"slide-number\">Slide {slide_num} of {len(prs.slides)}</div>
-            </div>
-            """
+            # Position as percentages
+            left_pct = (float(Emu(shape.left).inches) / sw * 100) if shape.left else 0
+            top_pct = (float(Emu(shape.top).inches) / sh * 100) if shape.top else 0
+            w_pct = (float(Emu(shape.width).inches) / sw * 100) if shape.width else 0
+            h_pct = (float(Emu(shape.height).inches) / sh * 100) if shape.height else 0
+
+            # Clamp width so element doesn't exceed slide right edge
+            w_clamped = min(w_pct, 100 - left_pct)
+
+            # Image shapes
+            if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                img_style = (
+                    f"left:{left_pct:.1f}%;top:{top_pct:.1f}%;"
+                    f"width:{w_clamped:.1f}%;height:{h_pct:.1f}%;"
+                )
+                try:
+                    img_blob = shape.image.blob
+                    img_ct = shape.image.content_type
+                    b64 = base64.b64encode(img_blob).decode()
+                    html_content += (
+                        f'<div class="slide-element slide-img" style="{img_style}">'
+                        f'<img class="slide-image" src="data:{img_ct};base64,{b64}" />'
+                        f"</div>"
+                    )
+                except Exception:
+                    pass
+                continue
+
+            # Text shapes — use auto height so text is never clipped
+            text = getattr(shape, "text", None)
+            if text and text.strip():
+                txt_style = (
+                    f"left:{left_pct:.1f}%;top:{top_pct:.1f}%;width:{w_clamped:.1f}%;"
+                )
+                # Only set explicit height if shape actually has one
+                if h_pct > 1:
+                    txt_style += f"height:{h_pct:.1f}%;"
+
+                # Try to get font properties from the first run
+                font_size = 14
+                font_color = "#333333"
+                font_bold = False
+                try:
+                    for para in shape.text_frame.paragraphs:
+                        for run in para.runs:
+                            if run.font.size:
+                                font_size = int(Emu(run.font.size).pt)
+                            if run.font.color and run.font.color.rgb:
+                                font_color = f"#{run.font.color.rgb}"
+                            if run.font.bold:
+                                font_bold = True
+                            break
+                        break
+                except Exception:
+                    pass
+
+                # Scale font size for responsive display
+                scaled_size = max(8, min(font_size * 0.6, 36))
+                bold_str = "font-weight:bold;" if font_bold else ""
+                text_escaped = (
+                    str(text)
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace("\n", "<br>")
+                )
+                html_content += (
+                    f'<div class="slide-element slide-text" style="{txt_style}'
+                    f"color:{font_color};font-size:{scaled_size:.0f}px;{bold_str}"
+                    f'padding:4px;">'
+                    f"<p>{text_escaped}</p></div>"
+                )
+
+        html_content += "</div></div>"
+        html_content += (
+            f'<div class="slide-label">Slide {slide_num} / {total_slides}</div>'
+        )
+
     html_content += "</body></html>"
     return HTMLResponse(content=html_content)
 
@@ -656,10 +789,8 @@ async def preview_file(
     if not full_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
 
-    converted_pdf = await _try_convert_pptx_to_pdf(full_path)
-    if converted_pdf is not None:
-        return converted_pdf
-
+    # PPTX preview: use HTML (preserves Chinese text + images)
+    # PDF conversion loses Chinese text due to font mapping issues in LibreOffice
     if full_path.suffix.lower() == ".pptx":
         try:
             return _pptx_fallback_html(full_path)

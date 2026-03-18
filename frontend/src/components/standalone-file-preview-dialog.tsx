@@ -207,16 +207,18 @@ export function StandaloneFilePreviewDialog({
                 />
               ) : fileName.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i) ? (
                 <div className="flex items-center justify-center h-full p-4">
-                  <img
-                    src={`data:image/${fileName.split('.').pop()};base64,${content || ''}`}
-                    alt={fileName}
-                    className="max-w-full max-h-full object-contain"
-                    onError={(e) => {
-                      e.currentTarget.style.display = 'none'
-                      const fallback = e.currentTarget.nextElementSibling as HTMLElement
-                      if (fallback) fallback.style.display = 'flex'
-                    }}
-                  />
+                  {content ? (
+                    <img
+                      src={`data:image/${fileName.split('.').pop()};base64,${content}`}
+                      alt={fileName}
+                      className="max-w-full max-h-full object-contain"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none'
+                        const fallback = e.currentTarget.nextElementSibling as HTMLElement
+                        if (fallback) fallback.style.display = 'flex'
+                      }}
+                    />
+                  ) : null}
                   <div className="hidden flex-col items-center justify-center h-full text-muted-foreground">
                     <span>{t('files.previewDialog.imageError.title')}</span>
                     <span className="text-sm">{t('files.previewDialog.imageError.hint')}</span>

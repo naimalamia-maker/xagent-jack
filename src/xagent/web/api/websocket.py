@@ -980,16 +980,31 @@ async def handle_file_upload_for_task(
                 if user is None:
                     raise ValueError("Authenticated user is required for file upload")
 
-                file_record = UploadedFile(
-                    user_id=int(cast(Any, user.id)),
-                    task_id=task_id,
-                    filename=normalized_file_name,
-                    storage_path=str(target_path),
-                    mime_type=file_type,
-                    file_size=int(file_size),
+                # Check if file with same storage_path already exists (e.g. duplicate upload)
+                existing_record = (
+                    db.query(UploadedFile)
+                    .filter(UploadedFile.storage_path == str(target_path))
+                    .first()
                 )
-                db.add(file_record)
-                db.flush()
+                if existing_record:
+                    logger.info(
+                        f"File already exists at {target_path}, reusing existing record"
+                    )
+                    file_record = existing_record
+                    file_record.file_size = int(file_size)  # type: ignore[assignment]
+                    file_record.mime_type = file_type
+                    db.flush()
+                else:
+                    file_record = UploadedFile(
+                        user_id=int(cast(Any, user.id)),
+                        task_id=task_id,
+                        filename=normalized_file_name,
+                        storage_path=str(target_path),
+                        mime_type=file_type,
+                        file_size=int(file_size),
+                    )
+                    db.add(file_record)
+                    db.flush()
 
                 if agent_service.workspace:
                     agent_service.workspace.register_file(

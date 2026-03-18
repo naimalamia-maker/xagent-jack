@@ -17,110 +17,58 @@ export function FilePreviewContent({ open }: FilePreviewContentProps) {
   const { filePreview } = state
   const { t } = useI18n()
 
-  // Load file content when the preview is open within container
   useEffect(() => {
     if (open && filePreview.fileId && !filePreview.content && !filePreview.error) {
       const loadFileContent = async () => {
         try {
           const apiUrl = getApiUrl()
+          const isPptxFile = !!filePreview.fileName.match(/\.pptx?$/i)
 
-          // PPTX files are converted to PDF by backend, treat as PDF
-          const isPptx = filePreview.fileName.match(/\.pptx$/i)
-          const isPdf = isPptx || filePreview.fileName.match(/\.pdf$/i)
-          const isDocx = filePreview.fileName.match(/\.docx$/i)
-
-          const url = `${apiUrl}/api/files/preview/${filePreview.fileId}`
+          const url = isPptxFile
+            ? `${apiUrl}/api/files/preview/${encodeURIComponent(filePreview.fileId)}`
+            : `${apiUrl}/api/files/download/${encodeURIComponent(filePreview.fileId)}`
 
           const response = await apiRequest(url, {
             cache: 'no-cache',
-            headers: {
-              'Cache-Control': 'no-cache',
-              'Pragma': 'no-cache'
-            }
+            headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
           })
 
-          if (response.ok) {
-            let fileContent
+          if (!response.ok) {
+            dispatch({ type: "SET_FILE_PREVIEW_CONTENT", payload: { content: "", error: t('files.previewDialog.errors.loadFailed') } })
+            return
+          }
 
-            // Get MIME type from response headers (more reliable than file extension)
-            const contentType = response.headers.get('content-type') || ''
-            const mimeType = contentType.split(';')[0].trim()
+          const contentType = (response.headers.get('content-type') || '').split(';')[0].trim()
+          let fileContent: string
+          let mimeType = contentType
 
-          // Determine file type based on MIME type instead of file extension
-          const isImage = mimeType.startsWith('image/')
-          const isPdf = mimeType.startsWith('application/pdf') || mimeType === 'application/pdf'
-          const isDocx = mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-
-          console.log('File preview debug:', {
-            fileName: filePreview.fileName,
-            mimeType,
-            isImage,
-            isDocx,
-            isPdf,
-            contentType: response.headers.get('content-type')
-          })
-
-          if (isImage || isPdf || isDocx || filePreview.fileName.match(/\.(docx|pdf|jpg|jpeg|png|gif|webp|svg|pptx)$/i)) {
-            const arrayBuffer = await response.arrayBuffer()
-
-            // Use modern, efficient base64 conversion
-            const bytes = new Uint8Array(arrayBuffer)
-            const binaryString = Array.from(bytes, (byte) => String.fromCharCode(byte)).join('')
-            fileContent = btoa(binaryString)
-
-            console.log('Base64 conversion completed:', {
-              mimeType,
-              originalSize: arrayBuffer.byteLength,
-              base64Size: fileContent.length
-            })
+          if (isPptxFile) {
+            if (contentType === 'application/pdf') {
+              // PDF from LibreOffice — binary to base64
+              const buf = await response.arrayBuffer()
+              fileContent = btoa(Array.from(new Uint8Array(buf), b => String.fromCharCode(b)).join(''))
+              mimeType = 'application/pdf'
             } else {
+              // HTML fallback
               fileContent = await response.text()
+              mimeType = 'text/html'
             }
+          } else if (filePreview.fileName.match(/\.(docx|pdf|jpg|jpeg|png|gif|webp|svg)$/i)) {
+            const buf = await response.arrayBuffer()
+            fileContent = btoa(Array.from(new Uint8Array(buf), b => String.fromCharCode(b)).join(''))
+          } else {
+            fileContent = await response.text()
+          }
 
-            dispatch({
-              type: "SET_FILE_PREVIEW_CONTENT",
-              payload: { content: fileContent, mimeType, error: null }
-            })
-          } else {
-            dispatch({
-              type: "SET_FILE_PREVIEW_CONTENT",
-              payload: { content: "", error: t('files.previewDialog.errors.loadFailed') }
-            })
-          }
+          dispatch({ type: "SET_FILE_PREVIEW_CONTENT", payload: { content: fileContent, mimeType, error: null } })
         } catch (error) {
-          if ((error as any)?.name === 'TypeError' && (error as any)?.message?.includes('Failed to fetch')) {
-            dispatch({
-              type: "SET_FILE_PREVIEW_CONTENT",
-              payload: { content: "", error: t('files.previewDialog.errors.cors') }
-            })
-          } else {
-            const msg = (error as any)?.message || t('common.errors.unknown')
-            dispatch({
-              type: "SET_FILE_PREVIEW_CONTENT",
-              payload: { content: "", error: t('files.previewDialog.errors.networkErrorWithMsg', { msg }) }
-            })
-          }
+          const msg = (error as any)?.message || t('common.errors.unknown')
+          dispatch({ type: "SET_FILE_PREVIEW_CONTENT", payload: { content: "", error: t('files.previewDialog.errors.networkErrorWithMsg', { msg }) } })
         }
       }
-
       loadFileContent()
     }
   }, [open, filePreview.fileId, filePreview.content, filePreview.error, dispatch, t, filePreview.fileName])
-
-  const processHtmlContent = (htmlContent: string, fileId: string) => {
-    if (!htmlContent || !fileId) return htmlContent
-
-    const apiUrl = getApiUrl()
-
-    return htmlContent.replace(
-      /(src|href)=["']([^"']+)["']/g,
-      (match, attr, path) => {
-        if (path.match(/^(https?:\/|data:|\/\/|#)/)) return match
-
-        return `${attr}="${apiUrl}/api/files/public/preview/${encodeURIComponent(fileId)}?relative_path=${encodeURIComponent(path)}"`
-      }
-    )
-  }
 
   return (
     <div className="w-full h-full">
@@ -141,37 +89,42 @@ export function FilePreviewContent({ open }: FilePreviewContentProps) {
           </div>
         ) : (
           <div className="flex-1 overflow-auto bg-muted/30 rounded border">
-            {filePreview.mimeType?.startsWith('image/') ? (
+            {/* PPTX as PDF (best quality) */}
+            {(filePreview.fileName.match(/\.pptx?$/i)) && filePreview.mimeType === 'application/pdf' && filePreview.content ? (
+              <iframe
+                src={`data:application/pdf;base64,${filePreview.content}`}
+                className="w-full h-full border-0"
+                title={filePreview.fileName}
+              />
+            /* PPTX as HTML fallback */
+            ) : (filePreview.fileName.match(/\.pptx?$/i)) && filePreview.mimeType === 'text/html' ? (
+              <iframe
+                srcDoc={filePreview.content || ''}
+                className="w-full h-full border-0"
+                sandbox="allow-same-origin allow-scripts"
+                title={filePreview.fileName}
+              />
+            ) : filePreview.fileName.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i) && filePreview.content ? (
               <div className="flex items-center justify-center h-full p-4">
                 <img
-                  src={`data:${filePreview.mimeType};base64,${filePreview.content || ''}`}
+                  src={`data:image/${filePreview.fileName.split('.').pop()};base64,${filePreview.content}`}
                   alt={filePreview.fileName}
                   className="max-w-full max-h-full object-contain"
-                  onError={(e) => {
-                    console.error('Image load error:', e)
-                    e.currentTarget.style.display = 'none'
-                    const fallback = e.currentTarget.nextElementSibling as HTMLElement
-                    if (fallback) fallback.style.display = 'flex'
-                  }}
                 />
-                <div className="hidden flex-col items-center justify-center h-full text-muted-foreground">
-                  <span>{t('files.previewDialog.imageError.title')}</span>
-                  <span className="text-sm">{t('files.previewDialog.imageError.hint')}</span>
-                </div>
               </div>
-            ) : filePreview.mimeType === 'application/pdf' || filePreview.fileName.toLowerCase().endsWith('.pdf') || filePreview.fileName.toLowerCase().endsWith('.pptx') ? (
+            ) : filePreview.fileName.toLowerCase().endsWith('.pdf') && filePreview.content ? (
               <div className="flex items-center justify-center h-full p-4">
                 <iframe
-                  src={`data:application/pdf;base64,${filePreview.content || ''}`}
+                  src={`data:application/pdf;base64,${filePreview.content}`}
                   className="w-full h-full border-0"
                   title={filePreview.fileName}
                 />
               </div>
-            ) : filePreview.mimeType?.includes('wordprocessingml') || filePreview.fileName.toLowerCase().endsWith('.docx') ? (
+            ) : filePreview.fileName.toLowerCase().endsWith('.docx') ? (
               <DocxPreviewRenderer base64Content={filePreview.content || ''} />
-            ) : filePreview.fileName.endsWith('.html') || filePreview.fileName.endsWith('.htm') ? (
+            ) : filePreview.fileName.match(/\.html?$/i) ? (
               <iframe
-                srcDoc={processHtmlContent(filePreview.content, filePreview.fileId)}
+                srcDoc={filePreview.content || ''}
                 className="w-full h-full border-0"
                 sandbox="allow-same-origin allow-scripts"
                 title={filePreview.fileName}

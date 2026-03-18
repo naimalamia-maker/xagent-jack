@@ -26,7 +26,7 @@ class JavaScriptExecutorCore:
             working_directory: Directory to use as working directory during execution
         """
         self.working_directory = working_directory
-        self.timeout = 30  # seconds
+        self.timeout = 120  # seconds (PPT generation with images can take time)
 
     def execute_code(
         self,
@@ -45,7 +45,16 @@ class JavaScriptExecutorCore:
         Returns:
             Dictionary with success status, output, and error information
         """
+        import re
         from pathlib import Path
+
+        # Auto-fix: ensure pres.writeFile() calls are awaited
+        # pptxgenjs writeFile returns a Promise and must be awaited
+        code = re.sub(
+            r"(?<!await\s)(\bpres\w*\.writeFile\s*\()",
+            r"await \1",
+            code,
+        )
 
         try:
             # Determine execution directory
@@ -92,9 +101,10 @@ class JavaScriptExecutorCore:
                 json.dumps({"dependencies": deps}), encoding="utf-8"
             )
 
-        # Create the JS script
+        # Create the JS script - wrap in async IIFE to support await
         script_file = temp_path / "script.js"
-        script_file.write_text(code, encoding="utf-8")
+        wrapped = f"(async () => {{\n{code}\n}})();"
+        script_file.write_text(wrapped, encoding="utf-8")
 
         # Install dependencies if needed
         if deps:
@@ -164,6 +174,7 @@ console.log = (...args) => {{
     logs.push(args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '));
 }};
 
+(async () => {{
 try {{
 {code}
 }} catch (error) {{
@@ -173,6 +184,7 @@ try {{
 
 console.log = originalLog;
 logs.forEach(log => console.log(log));
+}})();
 """
 
         script_file.write_text(wrapped_code, encoding="utf-8")
@@ -220,6 +232,27 @@ logs.forEach(log => console.log(log));
                 # Only count files created during this execution (not script.js)
                 if file.name != "script.js":
                     generated_files.append(file.name)
+
+        # Pre-generate PDF cache for PPTX files (for faster preview)
+        for file in exec_dir.glob("*.pptx"):
+            try:
+                pdf_path = file.with_suffix(".pdf")
+                if not pdf_path.exists():
+                    subprocess.run(
+                        [
+                            "soffice",
+                            "--headless",
+                            "--convert-to",
+                            "pdf",
+                            "--outdir",
+                            str(exec_dir),
+                            str(file),
+                        ],
+                        capture_output=True,
+                        timeout=60,
+                    )
+            except Exception:
+                pass
 
         output = result.stdout or "Code executed successfully (no output)"
         if generated_files:
@@ -316,7 +349,7 @@ def get_javascript_executor_tool(_info: Optional[dict[str, str]] = None) -> Any:
             const PptxGenJS = require('pptxgenjs');
             const pres = new PptxGenJS();
             pres.addText('Hello World', { x: 1, y: 1, fontSize: 32 });
-            pres.writeFile({ fileName: 'output.pptx' });
+            await pres.writeFile({ fileName: 'output.pptx' });
             \"\"\", packages='pptxgenjs')
 
             # Simple calculation

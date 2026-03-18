@@ -54,35 +54,43 @@ export function FilePreviewDialog({ open, onOpenChange }: FilePreviewDialogProps
           })
 
           if (response.ok) {
-            // For PPTX files (when preview endpoint returns HTML), use text()
-            // For binary files (images, PDFs), use arrayBuffer to get binary data
-            // For text files (HTML, etc.), use text() for proper encoding
-            let fileContent
+            const contentType = (response.headers.get('content-type') || '').split(';')[0].trim()
+            let fileContent: string
+            let mimeType = contentType
+
             if (isPptxFile) {
-              // PPTX preview endpoint returns HTML
-              fileContent = await response.text()
+              if (contentType === 'application/pdf') {
+                const buf = await response.arrayBuffer()
+                const bytes = new Uint8Array(buf)
+                const chunkSize = 16384
+                let binary = ''
+                for (let i = 0; i < bytes.length; i += chunkSize) {
+                  const chunk = bytes.slice(i, i + chunkSize)
+                  binary += String.fromCharCode.apply(null, Array.from(chunk))
+                }
+                fileContent = btoa(binary)
+                mimeType = 'application/pdf'
+              } else {
+                fileContent = await response.text()
+                mimeType = 'text/html'
+              }
             } else if (isDocxFile || baseFileName.match(/\.(jpg|jpeg|png|gif|webp|svg|pdf)$/i)) {
               const arrayBuffer = await response.arrayBuffer()
-
-              // Convert binary data to base64 using chunks to avoid stack overflow
-              const chunkSize = 16384; // 16KB chunks
+              const chunkSize = 16384
               const bytes = new Uint8Array(arrayBuffer)
               let binary = ''
-
               for (let i = 0; i < bytes.length; i += chunkSize) {
                 const chunk = bytes.slice(i, i + chunkSize)
                 binary += String.fromCharCode.apply(null, Array.from(chunk))
               }
-
               fileContent = btoa(binary)
             } else {
-              // For text files (HTML, etc.), use text() for proper encoding
               fileContent = await response.text()
             }
 
             dispatch({
               type: "SET_FILE_PREVIEW_CONTENT",
-              payload: { content: fileContent, error: null }
+              payload: { content: fileContent, mimeType, error: null }
             })
           } else {
             dispatch({
@@ -308,8 +316,14 @@ export function FilePreviewDialog({ open, onOpenChange }: FilePreviewDialogProps
             </div>
           ) : (
             <div className="flex-1 overflow-auto bg-muted/30 rounded border">
-              {/* PPTX files - display as converted HTML */}
-              {filePreview.fileName.toLowerCase().endsWith('.pptx') || filePreview.fileName.toLowerCase().endsWith('.ppt') ? (
+              {/* PPTX as PDF (best) or HTML (fallback) */}
+              {(filePreview.fileName.toLowerCase().endsWith('.pptx') || filePreview.fileName.toLowerCase().endsWith('.ppt')) && filePreview.mimeType === 'application/pdf' && filePreview.content ? (
+                <iframe
+                  src={`data:application/pdf;base64,${filePreview.content}`}
+                  className="w-full h-full border-0"
+                  title={filePreview.fileName}
+                />
+              ) : (filePreview.fileName.toLowerCase().endsWith('.pptx') || filePreview.fileName.toLowerCase().endsWith('.ppt')) ? (
                 <iframe
                   srcDoc={filePreview.content || ''}
                   className="w-full h-full border-0"
@@ -327,24 +341,30 @@ export function FilePreviewDialog({ open, onOpenChange }: FilePreviewDialogProps
                 />
               ) : filePreview.fileName.toLowerCase().endsWith('.pdf') ? (
                 <div className="flex items-center justify-center h-full p-4">
-                  <iframe
-                    src={`data:application/pdf;base64,${filePreview.content || ''}`}
-                    className="w-full h-full border-0"
-                    title={filePreview.fileName}
-                  />
+                  {filePreview.content ? (
+                    <iframe
+                      src={`data:application/pdf;base64,${filePreview.content}`}
+                      className="w-full h-full border-0"
+                      title={filePreview.fileName}
+                    />
+                  ) : (
+                    <span className="text-muted-foreground">{t('files.previewDialog.emptyContent')}</span>
+                  )}
                 </div>
               ) : baseFileName.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i) ? (
                 <div className="flex items-center justify-center h-full p-4">
-                  <img
-                    src={`data:image/${baseFileName.split('.').pop()};base64,${filePreview.content || ''}`}
-                    alt={baseFileName}
-                    className="max-w-full max-h-full object-contain"
-                    onError={(e) => {
-                      e.currentTarget.style.display = 'none'
-                      const fallback = e.currentTarget.nextElementSibling as HTMLElement
-                      if (fallback) fallback.style.display = 'flex'
-                    }}
-                  />
+                  {filePreview.content ? (
+                    <img
+                      src={`data:image/${baseFileName.split('.').pop()};base64,${filePreview.content}`}
+                      alt={baseFileName}
+                      className="max-w-full max-h-full object-contain"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none'
+                        const fallback = e.currentTarget.nextElementSibling as HTMLElement
+                        if (fallback) fallback.style.display = 'flex'
+                      }}
+                    />
+                  ) : null}
                   <div className="hidden flex-col items-center justify-center h-full text-muted-foreground">
                     <span>{t('files.previewDialog.imageError.title')}</span>
                     <span className="text-sm">{t('files.previewDialog.imageError.hint')}</span>

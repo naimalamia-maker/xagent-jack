@@ -429,6 +429,7 @@ Images are automatically saved to workspace.
         height: Optional[int] = None,
         resolution: Optional[str] = None,
         aspect_ratio: Optional[str] = None,
+        filename: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """
@@ -443,6 +444,10 @@ Images are automatically saved to workspace.
             height: Image height in pixels (alternative to size)
             resolution: Image resolution (e.g., "1920x1080")
             aspect_ratio: Aspect ratio (e.g., "3:2", "16:9")
+            filename: Optional filename for the saved image (e.g., "cover_image.png").
+                If specified, the image will be saved with this exact name in the
+                workspace output directory, making it predictable for later use
+                in JavaScript/PPT generation.
             **kwargs: Additional model-specific parameters
 
         Returns:
@@ -496,7 +501,9 @@ Images are automatically saved to workspace.
             if image_url and self._workspace:
                 try:
                     with self._workspace.auto_register_files():
-                        image_path = await self._download_image(image_url)
+                        image_path = await self._download_image(
+                            image_url, filename=filename
+                        )
                         if image_path:
                             image_file_id = self._workspace.get_file_id_from_path(
                                 image_path
