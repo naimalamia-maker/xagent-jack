@@ -50,7 +50,7 @@ from ..trace import (
 from ..transcript import normalize_transcript_messages
 from ..utils.compact import CompactConfig, CompactUtils
 from ..utils.llm_utils import clean_messages
-from .base import AgentPattern
+from .base import AgentPattern, notify_condition
 from .memory_utils import enhance_goal_with_memory, store_react_task_memory
 
 logger = logging.getLogger(__name__)
@@ -204,6 +204,7 @@ class ReActPattern(AgentPattern):
         self._current_step_name: Optional[str] = None
         self._current_action_id: Optional[str] = None
         self._pause_event = asyncio.Event()
+        self._pause_condition = asyncio.Condition()
         self._interrupt_event = (
             asyncio.Event()
         )  # For immediate interruption (continuation)
@@ -520,6 +521,7 @@ class ReActPattern(AgentPattern):
     def resume_execution(self) -> None:
         """Resume paused execution"""
         self._pause_event.clear()
+        notify_condition(self._pause_condition)
         logger.info("ReAct execution resumed")
 
     def interrupt_execution(self) -> None:
@@ -756,7 +758,10 @@ class ReActPattern(AgentPattern):
                 logger.info(
                     f"ReAct execution paused at iteration {iteration + 1}, waiting for resume..."
                 )
-                await self._pause_event.wait()
+                async with self._pause_condition:
+                    await self._pause_condition.wait_for(
+                        lambda: not self._pause_event.is_set()
+                    )
                 logger.info(f"ReAct execution resumed at iteration {iteration + 1}")
 
             # Check for interrupt state (for continuation/plan modification)

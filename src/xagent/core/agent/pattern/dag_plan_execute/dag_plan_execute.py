@@ -54,7 +54,7 @@ from ...exceptions import (
     PatternExecutionError,
 )
 from ...utils import ContextBuilder, StepExecutionResult
-from ..base import AgentPattern
+from ..base import AgentPattern, notify_condition
 
 # Import the extracted modules
 from .models import (
@@ -1223,18 +1223,7 @@ class DAGPlanExecutePattern(AgentPattern):
 
         # Clear the pause event to resume execution
         self._pause_event.clear()
-
-        # Notify the condition to wake up waiting tasks
-        async def _notify() -> None:
-            async with self._pause_condition:
-                self._pause_condition.notify_all()
-
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(_notify())
-        except RuntimeError:
-            pass
+        notify_condition(self._pause_condition)
 
         # Also resume the plan executor
         self.plan_executor.resume_execution()
@@ -1248,23 +1237,26 @@ class DAGPlanExecutePattern(AgentPattern):
         logger.info(f"Interrupting execution: {reason}")
         self._execution_interrupted = True
 
-        # If paused, resume to allow interruption to take effect
+        # If paused, clear pause and notify to allow interruption
         if self._pause_event.is_set():
             self._pause_event.clear()
+            notify_condition(self._pause_condition)
 
-        # Also clear the plan executor's pause event
+        # Also clear the plan executor's pause state
         if self.plan_executor._pause_event.is_set():
             self.plan_executor._pause_event.clear()
+            notify_condition(self.plan_executor._pause_condition)
 
         # Also interrupt the plan executor
         self.plan_executor.interrupt_execution()
 
-        # Also interrupt all ReAct patterns for immediate stop
-        # AND clear their pause events so they can resume
+        # Also interrupt all ReAct patterns and clear their pause state
         for pattern in self.step_patterns.values():
             pattern.interrupt_execution()
             if hasattr(pattern, "_pause_event") and pattern._pause_event.is_set():
                 pattern._pause_event.clear()
+                if hasattr(pattern, "_pause_condition"):
+                    notify_condition(pattern._pause_condition)
                 logger.info(
                     f"Resumed {type(pattern).__name__} from paused state for interruption"
                 )

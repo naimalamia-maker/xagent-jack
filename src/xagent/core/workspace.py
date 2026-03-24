@@ -8,7 +8,9 @@ ensuring that each agent has its own isolated workspace context.
 import contextvars
 import logging
 import os
+import re
 import shutil
+import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -331,6 +333,26 @@ class TaskWorkspace:
             else:
                 return (self.workspace_dir / path).resolve()
 
+    @staticmethod
+    def _normalize_filename_for_search(filename: str) -> str:
+        """Normalize a filename for fuzzy matching.
+
+        Applies the same normalization as the upload handler:
+        spaces -> underscores, remove special chars like brackets.
+        """
+        name_part = Path(filename).stem
+        extension = Path(filename).suffix
+
+        name_part = unicodedata.normalize("NFC", name_part)
+        name_part = re.sub(r"\s+", "_", name_part)
+        name_part = re.sub(r"[^\w\u4e00-\u9fff\-_.]", "", name_part)
+        name_part = re.sub(r"_+", "_", name_part)
+        name_part = name_part.strip("_")
+
+        if not name_part:
+            return filename
+        return name_part + extension
+
     def resolve_path_with_search(self, file_path: str) -> Path:
         """
         Resolve a file path within the workspace with intelligent directory search.
@@ -395,25 +417,70 @@ class TaskWorkspace:
                     # Strip the prefix to avoid duplicate directories
                     clean_path = Path(*path.parts[1:])
 
-            # 1. Try input directory first (most likely for images)
-            input_path = (self.input_dir / clean_path).resolve()
-            if input_path.exists():
-                return input_path
+            # Search directories in priority order
+            search_dirs = [
+                ("input", self.input_dir),
+                ("output", self.output_dir),
+                ("temp", self.temp_dir),
+            ]
 
-            # 2. Try output directory
-            output_path = (self.output_dir / clean_path).resolve()
-            if output_path.exists():
-                return output_path
+            # 1. Try exact match first
+            for _dir_name, dir_path in search_dirs:
+                candidate = dir_path / clean_path
+                if candidate.exists():
+                    return candidate.resolve()
 
-            # 3. Try temp directory
-            temp_path = (self.temp_dir / clean_path).resolve()
-            if temp_path.exists():
-                return temp_path
+            # 2. Try normalized filename (handles spaces, brackets, etc.)
+            normalized_name = self._normalize_filename_for_search(clean_path.name)
+            if normalized_name != clean_path.name:
+                normalized_clean = clean_path.parent / normalized_name
+                for _dir_name, dir_path in search_dirs:
+                    candidate = dir_path / normalized_clean
+                    if candidate.exists():
+                        logger.info(
+                            f"File '{file_path}' matched via normalized name: "
+                            f"'{normalized_name}'"
+                        )
+                        return candidate.resolve()
 
-            # 4. If not found, raise error
+            # 3. Try fuzzy match — also collect file list for error message
+            request_stem = clean_path.stem.replace(" ", "").replace("_", "")
+            request_suffix = clean_path.suffix.lower()
+            all_files: List[str] = []
+            for dir_name, dir_path in search_dirs:
+                if not dir_path.exists():
+                    continue
+                for existing_file in dir_path.iterdir():
+                    if not existing_file.is_file():
+                        continue
+                    all_files.append(f"{dir_name}/{existing_file.name}")
+                    if (
+                        request_suffix
+                        and existing_file.suffix.lower() != request_suffix
+                    ):
+                        continue
+                    existing_stem = existing_file.stem.replace(" ", "").replace("_", "")
+                    if (
+                        request_stem
+                        and existing_stem
+                        and (
+                            request_stem in existing_stem
+                            or existing_stem in request_stem
+                        )
+                    ):
+                        logger.info(
+                            f"File '{file_path}' fuzzy matched to: "
+                            f"'{existing_file.name}'"
+                        )
+                        return existing_file.resolve()
+
+            # 4. Not found — include available files in error message
+            hint = ""
+            if all_files:
+                hint = f". Available files: {', '.join(all_files[:10])}"
             raise FileNotFoundError(
                 f"File '{file_path}' not found in workspace directories "
-                f"(tried: input, output, temp)"
+                f"(tried: input, output, temp){hint}"
             )
 
     def get_output_files(self, include_subdirs: bool = True) -> List[Dict[str, Any]]:

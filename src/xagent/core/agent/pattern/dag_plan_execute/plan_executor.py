@@ -28,6 +28,7 @@ from ...trace import (
     trace_task_start,
 )
 from ...utils import ContextBuilder, StepExecutionResult
+from ..base import notify_condition
 from .models import ExecutionPlan, PlanStep, StepStatus, UserInputMapper
 from .step_agent_factory import StepAgentFactory
 
@@ -157,7 +158,10 @@ class PlanExecutor:
                     logger.info(
                         f"Execution paused before step {step_id}, waiting for resume..."
                     )
-                    await self._pause_event.wait()
+                    async with self._pause_condition:
+                        await self._pause_condition.wait_for(
+                            lambda: not self._pause_event.is_set()
+                        )
                     logger.info(f"Execution resumed before step {step_id}")
 
                 # Check if execution was interrupted
@@ -528,19 +532,8 @@ class PlanExecutor:
     def resume_execution(self) -> None:
         """Resume paused execution"""
         self._pause_event.clear()
+        notify_condition(self._pause_condition)
         logger.info("Execution resumed")
-
-        # Notify the condition to wake up waiting tasks
-        async def _notify() -> None:
-            async with self._pause_condition:
-                self._pause_condition.notify_all()
-
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(_notify())
-        except RuntimeError:
-            pass
 
     def interrupt_execution(self) -> None:
         """Interrupt execution for plan modification"""
